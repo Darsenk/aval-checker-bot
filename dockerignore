@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs y datos temporales
+*.log
+*.db
+*.sqlite
+data/
+logs/
+
+# Documentación
+README.md
+DEPLOYMENT_FIX.md
+*.md
+
+# Otros
+.dockerignore
