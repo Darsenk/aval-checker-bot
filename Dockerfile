@@ -1,14 +1,14 @@
 # Imagen base ligera
 FROM python:3.11-slim
 
-# Evitar prompts interactivos
+# Evitar errores interactivos
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Variables útiles
+# Variables Python
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Instalar dependencias del sistema (optimizado)
+# Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Google Chrome (método moderno)
+# Instalar Google Chrome (método moderno SIN apt-key)
 RUN mkdir -p /etc/apt/keyrings \
     && wget -qO /etc/apt/keyrings/google.gpg https://dl.google.com/linux/linux_signing_key.pub \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
@@ -44,20 +44,27 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Crear directorio de trabajo
+# Instalar ChromeDriver compatible
+RUN wget -O /tmp/chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.85/linux64/chromedriver-linux64.zip \
+    && unzip /tmp/chromedriver.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/bin/chromedriver \
+    && chmod +x /usr/bin/chromedriver \
+    && rm -rf /tmp/*
+
+# Directorio de trabajo
 WORKDIR /app
 
-# Copiar requirements primero (mejor cache)
+# Copiar requirements primero (cache)
 COPY requirements.txt .
 
-# Instalar dependencias Python optimizado
+# Instalar dependencias Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el resto del proyecto
+# Copiar todo el proyecto
 COPY . .
 
-# Puerto (si usas web, opcional)
+# Puerto para Koyeb
 EXPOSE 8000
 
-# Comando de ejecución (ajústalo a tu app)
-CMD ["python", "main.py"]
+# Ejecutar tu bot
+CMD ["python", "AvalBot_ConLicencias.py"]
