@@ -1,98 +1,63 @@
-# ══════════════════════════════════════════════════════════════
-# DOCKERFILE OPTIMIZADO PARA KOYEB - PYTHON 3.11
-# ══════════════════════════════════════════════════════════════
-
-# Usar Python 3.11 slim (compatible con python-telegram-bot)
+# Imagen base ligera
 FROM python:3.11-slim
 
-# Instalar dependencias del sistema necesarias para Chrome y Selenium
-RUN apt-get update && apt-get install -y \
+# Evitar prompts interactivos
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Variables útiles
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Instalar dependencias del sistema (optimizado)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
-    unzip \
-    curl \
     ca-certificates \
+    curl \
+    unzip \
     fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
     libnss3 \
-    libxcomposite1 \
+    libatk-bridge2.0-0 \
+    libx11-xcb1 \
+    libxcb-dri3-0 \
+    libdrm2 \
     libxdamage1 \
     libxrandr2 \
-    xdg-utils \
+    libgbm1 \
+    libasound2 \
+    libatk1.0-0 \
+    libcups2 \
+    libxcomposite1 \
+    libxfixes3 \
+    libxext6 \
+    libxrender1 \
+    libxi6 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Google Chrome
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+# Instalar Google Chrome (método moderno)
+RUN mkdir -p /etc/apt/keyrings \
+    && wget -qO /etc/apt/keyrings/google.gpg https://dl.google.com/linux/linux_signing_key.pub \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+       > /etc/apt/sources.list.d/google.list \
     && apt-get update \
-    && apt-get install -y google-chrome-stable \
+    && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
-
-# Instalar ChromeDriver
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d'.' -f1) \
-    && wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}" -O /tmp/version \
-    && DRIVER_VERSION=$(cat /tmp/version) \
-    && wget -q "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" -O /tmp/chromedriver.zip \
-    && unzip /tmp/chromedriver.zip -d /usr/local/bin/ \
-    && rm /tmp/chromedriver.zip /tmp/version \
-    && chmod +x /usr/local/bin/chromedriver
 
 # Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar archivos de requirements primero (cache de Docker)
+# Copiar requirements primero (mejor cache)
 COPY requirements.txt .
 
-# Instalar dependencias de Python
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Instalar dependencias Python optimizado
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código del bot
-COPY AvalBot_ConLicencias.py .
+# Copiar el resto del proyecto
+COPY . .
 
-# Crear directorio para persistencia de datos
-RUN mkdir -p /app/data
-
-# Exponer puerto 8000 para health check de Koyeb
+# Puerto (si usas web, opcional)
 EXPOSE 8000
 
-# Crear script de inicio optimizado
-RUN echo '#!/bin/bash\n\
-set -e\n\
-\n\
-echo "🚀 Iniciando servicios..."\n\
-\n\
-# Health check HTTP en background\n\
-python3 -m http.server 8000 &\n\
-HTTP_PID=$!\n\
-echo "✅ Health check servidor iniciado (PID: $HTTP_PID)"\n\
-\n\
-# Esperar 1 segundo\n\
-sleep 1\n\
-\n\
-# Iniciar bot de Telegram\n\
-echo "🤖 Iniciando Aval Bot..."\n\
-python3 -u AvalBot_ConLicencias.py\n\
-\n\
-# Si el bot falla, matar el servidor HTTP\n\
-kill $HTTP_PID 2>/dev/null || true\n\
-' > /app/start.sh && chmod +x /app/start.sh
-
-# Variable de entorno (se define en Koyeb)
-ENV BOT_TOKEN=""
-
-# Usuario no-root para seguridad
-RUN useradd -m -u 1000 botuser && \
-    chown -R botuser:botuser /app
-USER botuser
-
-# Comando de inicio
-CMD ["/bin/bash", "/app/start.sh"]
+# Comando de ejecución (ajústalo a tu app)
+CMD ["python", "main.py"]
