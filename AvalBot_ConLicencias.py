@@ -233,6 +233,8 @@ class ProxyRotator:
         """Obtiene proxies gratuitos"""
         all_proxies = []
         
+        # OPTIMIZADO: Solo obtener proxies, sin validación inicial
+        # La validación se hace bajo demanda cuando se usan
         try:
             r = requests.get(
                 'https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
@@ -242,11 +244,11 @@ class ProxyRotator:
                 proxies = r.text.strip().split('\r\n')
                 all_proxies.extend([p for p in proxies if ':' in p])
         except:
-            pass
+            logger.warning("⚠️ No se pudo obtener proxies de proxyscrape")
         
         try:
             r = requests.get(
-                'https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc',
+                'https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc',
                 timeout=10
             )
             if r.status_code == 200:
@@ -257,21 +259,13 @@ class ProxyRotator:
                     if ip and port:
                         all_proxies.append(f"{ip}:{port}")
         except:
-            pass
+            logger.warning("⚠️ No se pudo obtener proxies de geonode")
         
-        all_proxies = list(set(all_proxies))
+        # Eliminar duplicados y limitar a 20 proxies
+        all_proxies = list(set(all_proxies))[:20]
         
-        valid_proxies = []
-        logger.info(f"🔍 Probando {len(all_proxies[:50])} proxies...")
-        
-        for proxy in all_proxies[:50]:
-            if self._test_proxy(proxy):
-                valid_proxies.append(proxy)
-                if len(valid_proxies) >= 10:
-                    break
-        
-        logger.info(f"✅ {len(valid_proxies)} proxies válidos")
-        return valid_proxies
+        logger.info(f"✅ {len(all_proxies)} proxies cargados (validación bajo demanda)")
+        return all_proxies
     
     def _test_proxy(self, proxy):
         try:
@@ -285,12 +279,22 @@ class ProxyRotator:
             return False
     
     def update_proxies(self):
+        """Actualiza proxies de forma asíncrona"""
         now = time.time()
         if not self.proxies or (now - self.last_update > self.update_interval):
-            logger.info("🔄 Actualizando proxies...")
-            self.proxies = self.fetch_free_proxies()
-            self.last_update = now
-            self.current_index = 0
+            logger.info("🔄 Actualizando proxies en segundo plano...")
+            # Actualizar en thread separado para no bloquear
+            def _async_update():
+                self.proxies = self.fetch_free_proxies()
+                self.last_update = time.time()
+                self.current_index = 0
+            
+            # Si no hay proxies, esperar la primera carga
+            if not self.proxies:
+                _async_update()
+            else:
+                # Si ya hay proxies, actualizar en background
+                threading.Thread(target=_async_update, daemon=True).start()
     
     def get_next_proxy(self):
         self.update_proxies()
@@ -718,9 +722,10 @@ def main():
     
     print("🤖 Iniciando Aval Bot con Sistema de Licencias...")
     print(f"👑 Owner ID: {OWNER_ID}")
-    print("🌐 Cargando proxies...")
-    proxy_rotator.update_proxies()
-    print(f"✅ {len(proxy_rotator.proxies)} proxies listos")
+    
+    # OPTIMIZADO: No bloquear el inicio esperando proxies
+    # Se cargan en segundo plano cuando se necesiten
+    print("🌐 Proxies se cargarán cuando sean necesarios...")
     
     app = Application.builder().token(BOT_TOKEN).build()
     
@@ -740,6 +745,16 @@ def main():
     
     print("✅ Bot activo con sistema de licencias")
     print("💡 Usa /genkey para generar keys")
+    
+    # Cargar proxies en segundo plano después de iniciar
+    def load_proxies_async():
+        time.sleep(5)  # Esperar 5s después del inicio
+        logger.info("🔄 Cargando proxies en segundo plano...")
+        proxy_rotator.update_proxies()
+        logger.info(f"✅ {len(proxy_rotator.proxies)} proxies listos")
+    
+    threading.Thread(target=load_proxies_async, daemon=True).start()
+    
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
