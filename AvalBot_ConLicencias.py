@@ -350,6 +350,55 @@ def generate_random_document():
     """Genera cédula colombiana aleatoria"""
     return str(random.randint(10000000, 99999999))
 
+def create_chrome_driver():
+    """Crea instancia de Chrome WebDriver con configuración stealth"""
+    try:
+        options = webdriver.ChromeOptions()
+        
+        # Configuración para Koyeb (ambiente headless)
+        options.add_argument('--headless=new')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--window-size=1920,1080')
+        
+        # User agent realista
+        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        # Preferencias para evitar detección
+        prefs = {
+            'credentials_enable_service': False,
+            'profile.password_manager_enabled': False,
+            'profile.default_content_setting_values.notifications': 2
+        }
+        options.add_experimental_option('prefs', prefs)
+        options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging'])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # Crear driver
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        
+        # Aplicar stealth
+        stealth(driver,
+            languages=["es-ES", "es"],
+            vendor="Google Inc.",
+            platform="Win32",
+            webgl_vendor="Intel Inc.",
+            renderer="Intel Iris OpenGL Engine",
+            fix_hairline=True,
+        )
+        
+        logger.info("✅ Chrome driver creado exitosamente")
+        return driver
+        
+    except Exception as e:
+        logger.error(f"❌ Error creando Chrome driver: {e}")
+        raise
+
 def type_into(driver, wait, by, selector, text):
     """Escribe en un campo de forma segura"""
     try:
@@ -650,45 +699,39 @@ async def revoke_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start"""
+    """Mensaje de bienvenida"""
     user_id = update.effective_user.id
-    username = update.effective_user.username or "Usuario"
     
-    # Verificar licencia
-    valid, msg = license_mgr.check_license(user_id)
+    msg = (
+        "👋 **Bienvenido a Aval Checker Bot**\n\n"
+        "🔐 Este bot requiere licencia para funcionar.\n\n"
+    )
     
-    if user_id == OWNER_ID:
-        welcome = (
-            f"👑 **Bienvenido Owner**\n\n"
-            f"ID: `{user_id}`\n\n"
-            f"**Comandos de Owner:**\n"
-            f"`/genkey <días>` - Generar key\n"
-            f"`/listkeys` - Listar keys\n"
-            f"`/revoke <key>` - Revocar key\n\n"
-            f"**Comandos de usuario:**\n"
-            f"`/check CC|MM|YY|CVV` - Checkear\n"
-            f"`/status` - Estadísticas\n"
-            f"`/proxies` - Info proxies\n"
-            f"`/mykey` - Info de tu licencia"
+    valid, status = license_mgr.check_license(user_id)
+    
+    if valid:
+        msg += f"{status}\n\n"
+        msg += (
+            "**Comandos disponibles:**\n"
+            "`/check` - Verificar tarjetas\n"
+            "`/status` - Ver tus estadísticas\n"
+            "`/mykey` - Info de tu licencia\n"
+            "`/proxies` - Estado de proxies\n"
+            "`/help` - Ayuda completa"
         )
     else:
-        welcome = (
-            f"🤖 **AVAL CHECKER BOT**\n\n"
-            f"Usuario: @{username}\n"
-            f"ID: `{user_id}`\n\n"
-            f"{msg}\n\n"
-            f"**Comandos:**\n"
-            f"`/redeem <key>` - Activar licencia\n"
-            f"`/check CC|MM|YY|CVV` - Checkear\n"
-            f"`/status` - Estadísticas\n"
-            f"`/mykey` - Info de licencia\n"
-            f"`/help` - Ayuda"
+        msg += (
+            "❌ No tienes licencia activa.\n\n"
+            "**Para obtener acceso:**\n"
+            "1. Contacta al vendedor\n"
+            "2. Obtén una key de licencia\n"
+            "3. Actívala con: `/redeem TU-KEY`"
         )
     
-    await update.message.reply_text(welcome, parse_mode='Markdown')
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Activar key"""
+    """Activar una key de licencia"""
     user_id = update.effective_user.id
     
     if len(context.args) != 1:
@@ -700,86 +743,28 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     key = context.args[0]
     
-    success, msg = license_mgr.activate_key(key, user_id)
+    success, message = license_mgr.activate_key(key, user_id)
     
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    if success:
+        await update.message.reply_text(
+            f"🎉 {message}\n\n"
+            f"Ya puedes usar:\n"
+            f"`/check` - Verificar tarjetas\n"
+            f"`/status` - Ver estadísticas\n"
+            f"`/help` - Ayuda",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(message, parse_mode='Markdown')
 
 async def mykey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ver info de licencia"""
+    """Ver info de la licencia actual"""
     user_id = update.effective_user.id
     
-    valid, msg = license_mgr.check_license(user_id)
+    valid, message = license_mgr.check_license(user_id)
     
-    await update.message.reply_text(
-        f"🔑 **Tu Licencia**\n\n{msg}",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(message, parse_mode='Markdown')
 
-# ══════════════════════════════════════════════════════════════
-# RESTO DEL BOT (checker, etc)
-# ══════════════════════════════════════════════════════════════
-
-def crear_driver(use_proxy=True):
-    """Crea driver con proxy"""
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_argument("--window-size=1920,1080")
-    
-    if use_proxy:
-        proxy = proxy_rotator.get_next_proxy()
-        if proxy:
-            options.add_argument(f'--proxy-server={proxy}')
-            logger.info(f"🌐 Proxy: {proxy}")
-    
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-    ]
-    options.add_argument(f'user-agent={random.choice(user_agents)}')
-    
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    
-    stealth(driver,
-        languages=["es-ES", "es"],
-        vendor="Google Inc.",
-        platform="Win32",
-        webgl_vendor="Intel Inc.",
-        renderer="Intel Iris OpenGL Engine",
-        fix_hairline=True,
-    )
-    
-    return driver
-
-def get_next_url(user_id):
-    """Rota URLs por usuario"""
-    if user_id not in state.cards_on_current_url:
-        state.cards_on_current_url[user_id] = 0
-        state.url_index[user_id] = 0
-    
-    state.cards_on_current_url[user_id] += 1
-    
-    if state.cards_on_current_url[user_id] >= CARDS_PER_URL:
-        state.url_index[user_id] = (state.url_index[user_id] + 1) % len(AVAL_URLS)
-        state.cards_on_current_url[user_id] = 0
-    
-    return AVAL_URLS[state.url_index[user_id]]
-
-def generate_random_data():
-    return {
-        'email': f"{fake.first_name().lower()}{random.randint(100,999)}@gmail.com",
-        'phone': f"3{random.choice(['10','15','20','25'])}{random.randint(1000000,9999999)}",
-        'doc': str(random.randint(10000000, 99999999)),
-        'name': fake.first_name(),
-        'surname': fake.last_name(),
-        'address': f"Calle {random.randint(1,100)} #{random.randint(1,50)}-{random.randint(1,50)}"
-    }
-
-@require_license
 @require_license
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checkear tarjeta (requiere licencia)"""
