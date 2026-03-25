@@ -1,4 +1,3 @@
-# Imagen base ligera
 FROM python:3.11-slim
 
 # Evitar errores interactivos
@@ -66,5 +65,5 @@ COPY . .
 # Puerto para Koyeb
 EXPOSE 8000
 
-# Ejecutar tu bot
-CMD ["python", "AvalBot_ConLicencias.py"]
+# Ejecutar bot con output unbuffered para logs inmediatos
+CMD ["python3", "-u", "AvalBot_ConLicencias.py"]
