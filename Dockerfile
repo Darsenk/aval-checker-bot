@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Google Chrome (método moderno SIN apt-key)
+# Instalar Google Chrome (sin apt-key)
 RUN mkdir -p /etc/apt/keyrings \
     && wget -qO /etc/apt/keyrings/google.gpg https://dl.google.com/linux/linux_signing_key.pub \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
@@ -43,12 +43,14 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar ChromeDriver compatible
-RUN wget -O /tmp/chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.85/linux64/chromedriver-linux64.zip \
-    && unzip /tmp/chromedriver.zip -d /tmp/ \
-    && mv /tmp/chromedriver-linux64/chromedriver /usr/bin/chromedriver \
-    && chmod +x /usr/bin/chromedriver \
-    && rm -rf /tmp/*
+# 🔥 FIX REAL: ChromeDriver EXACTO según versión instalada
+RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') && \
+    echo "Chrome version: $CHROME_VERSION" && \
+    wget -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" && \
+    unzip /tmp/chromedriver.zip -d /tmp/ && \
+    mv /tmp/chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
+    chmod +x /usr/bin/chromedriver && \
+    rm -rf /tmp/*
 
 # Directorio de trabajo
 WORKDIR /app
@@ -65,5 +67,5 @@ COPY . .
 # Puerto para Koyeb
 EXPOSE 8000
 
-# Ejecutar bot con output unbuffered para logs inmediatos
+# Ejecutar bot
 CMD ["python3", "-u", "AvalBot_ConLicencias.py"]
