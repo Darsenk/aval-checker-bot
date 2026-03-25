@@ -43,10 +43,12 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# 🔥 FIX REAL: ChromeDriver EXACTO según versión instalada
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') && \
-    echo "Chrome version: $CHROME_VERSION" && \
-    wget -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" && \
+# 🔥 ChromeDriver dinámico y compatible (FIX REAL)
+RUN CHROME_MAJOR=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1) && \
+    echo "Chrome major version: $CHROME_MAJOR" && \
+    DRIVER_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_MAJOR") && \
+    echo "Using ChromeDriver version: $DRIVER_VERSION" && \
+    wget -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip" && \
     unzip /tmp/chromedriver.zip -d /tmp/ && \
     mv /tmp/chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
     chmod +x /usr/bin/chromedriver && \
