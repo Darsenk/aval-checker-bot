@@ -1,15 +1,6 @@
-# ══════════════════════════════════════════════════════════════
-# REQUIREMENTS.TXT - VERSIONES COMPATIBLES CON PYTHON 3.11
-# ══════════════════════════════════════════════════════════════
-
-# Telegram Bot (versión más reciente compatible)
 python-telegram-bot==21.0.1
-
-# Selenium y automatización web
 selenium==4.16.0
 selenium-stealth==1.0.6
 webdriver-manager==4.0.1
-
-# Utilidades
 faker==22.0.0
 requests==2.31.0
